@@ -1,0 +1,324 @@
+---
+title: "League of Legends - Analysis on Competitive Matches"
+author: "Edgar Zhu"
+date: "5/4/2018"
+output:
+  html_document: default
+  pdf_document: default
+---
+## Introduction
+League of Legends is an online multiplier battle arena video game made for the PC by Riot Games. Players control a "champion" with unique abilities and pair with 4 other players to battle against another team of 5. Because each team has 5 players, there are 5 'roles' or 'positions' that each player can take. Each role/position normally occupies a 'lane'. These are the 'lanes': 
+![](/Users/ez/Desktop/lol.png)
+
+In this map, you'll notice that there are colored arrows pointing at each other. These arrows denote the 'lane' or 'path' that a player on each team must travel to in order to fight the player on the opposing team who is also assigned to this lane. The team whose nexus resides on the bottom left half of the map, and therefore controls that portion of the map, is usually denoted as the 'blue' team, while the team whose nexus resides on the top right, and therefore controls the top right portion of the map, is referred to as the 'red' team. 
+
+You'll notice that there are only 3 lanes, but I mentioned that there were 5 roles. This is because the bottom lane is occupied by 2 roles: the 'support' and the 'attack damage carry'. You can think of the support as a 'healer' type role, who protects the 'attack damage carry', who is the team's main source of damage to kill the opposing team. 
+
+The 'jungler' role, is the player who has reign of the forest area in between the lanes, and this area, called the 'jungle', is usually referred to as its own lane. For more information: http://leagueoflegends.wikia.com/wiki/Lanes  
+
+The ultimate objective of League of Legends is to destroy the opposing team's "Nexus", a structure that can be thought of as a goal post, while protecting their own. Throughout each game, the player's champion can increase in strength by purchasing items and experience through minigames like killing enemy champions, killing monsters, or destroying structures. For more information on the basics of League of Legends, here are some helpful links:
+
+https://en.wikipedia.org/wiki/League_of_Legends
+http://leagueoflegends.wikia.com/wiki/League_of_Legends_Wiki 
+https://www.reddit.com/r/summonerschool/wiki/101 
+
+While it can be played casually, there is also an 'eSports' scene, where professional players participate in competitions and tournaments, much like 'traditional' sports. For more information on the eSports scene and professional League of Legends, here are some helpful links:
+
+https://en.wikipedia.org/wiki/ESports
+https://www.lolesports.com/
+https://en.wikipedia.org/wiki/League_of_Legends_World_Championship 
+
+## Goal
+The purpose of this tutorial is to process and analyze data for professional League of Legends Matches over the world, and see common trends in the winner of these competitive matches. 
+
+To start, we need to download data for League of Legends competitive matches between 2014-2018: https://www.kaggle.com/chuckephron/leagueoflegends 
+
+Before we read in the csv files, here is a list of descriptions for the column names that may be a bit confusing for someone unfamiliar with League of Legends: 
+
+Address: The match history website hosted on the league of legends website that the data is scraped from. Each individual address can be thought of as a particular competitive match. 
+League: League/region that the match took place in. North American League of Legends Championship Series (NALCS), International World Championship (WC), Circuito Brasileiro de League of Legends (CBLOL), etc. Basically, these are the regions that the competitions are being held in. More information can be found here: https://eu.lolesports.com/en/leagues 
+Season: Like football season, NALCS is played during either Spring or Summer.
+
+Type: Season games, playoff games, or international games. 
+
+blueTeamTag: Abbreviation of organization name of the team playing on the blue side of the map.
+
+bResult: Result of match for blue team - 1 win, 0 loss
+
+blueTop: the blue team's top laner's player ID/gamer tag. 
+
+blueTopChamp: the 'champion' that this player is playing. 
+
+Team: bKills, rKills. Take for example b Kills; this is short for blue team kills, meaning that the blue team secured a kill on a red team member. 
+
+## Setting up 
+Now we can read in the csv files for the match statistics and the champion kills statistics, as well as import the necessary libraries. 
+```{r setup, eval=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(randomForest)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+lol <- read_csv("/Users/ez/Downloads/lol/matchinfo.csv")
+kills <- read_csv("/Users/ez/Downloads/lol/kills.csv")
+head(lol)
+```
+
+
+## Wrangling/Tidying data
+Now, let's keep only data from 2017-2018 to have a more maintainable data set.
+First, we are going to merge the kills data set and the match dataset (by the Address column) in order to create new columns for red team kills, blue team kills, and total kills in game. 
+```{r kills, eval=TRUE}
+lol <- merge(lol, kills, by="Address") 
+lol <- filter(lol, Year == 2017 | Year == 2018) %>%
+  mutate(id=1:n()) %>%
+  # Get blue_team and red_team as own columns
+  spread(Team, Killer) %>%
+  group_by(Address) %>%
+  # Count number of kills blue_team and red_team got
+  mutate(blue_team_kills = length(which(!is.na(bKills)))) %>%
+  mutate(red_team_kills= length(which(!is.na(rKills)))) %>%
+  mutate(total_kills = length(which(!is.na(bKills))) + length(which(!is.na(rKills)))) %>%
+  # Selecting only the columns we need
+  dplyr::select(-Time, -Victim, -Assist_1, -Assist_2, -Assist_3, -Assist_4, -x_pos, -y_pos, -id, -bKills, -rKills) %>%
+  ungroup()
+```
+
+Now that we have created the new columns by combining the two dataframes and removing the old unnecessary ones, we will notice that there are duplicate rows. (This is because in the kills data set, each individual kill was recorded as a separate entry, even if they occured in the same game.) Let's fix this.
+```{r dupes, eval=TRUE}
+lol <- unique(lol)
+```
+
+We can also remove the address column, since we have guaranteed that each entry is a unique competitive match.
+```{r address, eval=TRUE}
+lol <- lol %>%
+  dplyr::select(-Address)
+```
+Next, we'll notice that there are two columns for the outcome of the match. Let's remedy this by combining bResult and rResult into one column, then changing the entries based on the concatenated value.
+```{r win, eval=TRUE}
+lol <- unite(lol, "Winner", c("bResult", "rResult"))
+# If the entry is '0_1', this means that the red team won
+lol$Winner[lol$Winner == '0_1'] <- 'Red'
+# If the entry is '1_0, this means that the blue team won
+lol$Winner[lol$Winner == '1_0'] <- 'Blue'
+```
+
+Finally, let's remove the columns for the champion names and player tags.
+```{r champ, eval=TRUE}
+lol <- lol %>%
+  dplyr::select(-blueTopChamp, -blueJungleChamp, -blueMiddleChamp, -blueADCChamp, -blueSupportChamp, -redTopChamp, -redJungleChamp, -redMiddleChamp, -redADCChamp, -redSupportChamp, -blueTop, -blueJungle, -blueMiddle, -blueADC, -blueSupport, -redTop, -redJungle, -redMiddle, -redADC, -redSupport)
+head(lol)
+```
+
+
+## Exploratory Data Analysis
+Let's visualize the number of games per league/region and the types of games these are composed of.
+```{r region, eval=TRUE}
+lol %>%
+  ggplot(aes(x=League, color=Type)) +
+  geom_bar()+ 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+The way the competitive scene works in League of Legends is that during the regular season (Spring/Summer), teams within a region play matches in order qualify for playoffs, which usually determines which team from that region participates in the international tournament usually hosted between regular seasons. This works similarly to American football, where teams play in the playoffs to go to the Super Bowl. 
+
+From the above graph, we can see that the majority of games played are regular season games, and a smaller fraction of games are playoff type games. 
+
+For Leagues like IEM, MSI, RR, and WC, these are the international tournaments that teams from each region (North America, Europe, etc.) strive to reach. So it makes sense that all of the games from these 4 Leagues are solely composed of International type games. 
+
+
+We can also plot average game length per region.
+```{r length, eval=TRUE}
+# First we order the dataframe by increasing average game length
+game_length <- lol %>%
+  group_by(League) %>%
+  summarize(avg_game_length = mean(gamelength)) %>%
+  arrange(avg_game_length)
+game_length
+
+# Then we change levels inside the League column to represent the order of the data
+game_length$League <- as.vector(game_length$League) # Get rid of factors
+game_length$League <- factor(game_length$League, game_length$League) # Add ordered factors back
+
+game_length %>%
+  ggplot(aes(x=League, y=avg_game_length)) +
+  geom_point() 
+```
+
+As we can see, OPL (Oceanic Pro League) has the lowest average game time, while IEM (Intel Extreme Masters), which is an international tournament, has the longest average game time.
+
+
+We can also visualize the distribution for game length per region
+```{r boxplot1, eval=TRUE}
+lol %>%
+  ggplot(mapping=aes(x=League, y=gamelength)) +
+  geom_boxplot()
+```
+
+### Bloodiest region
+One way teams can progress through the game and gain an advantage is to kill enemy players. Let's plot the average amount of kills per game by region.
+```{r kda, eval=TRUE}
+# First we order the dataframe by increasing average game length
+kda <- lol %>%
+  group_by(League) %>%
+  summarize(avg_kills = mean(total_kills))%>%
+  arrange(avg_kills)
+head(kda)
+
+# Then we change levels inside the League column to represent the order of the data
+kda$League <- as.vector(kda$League) # Get rid of factors
+kda$League <- factor(kda$League, kda$League) # Add ordered factors back
+
+kda %>%
+  ggplot(aes(x=League, y=avg_kills)) +
+  geom_point() 
+```
+
+We can see that the League with the least average amount of kills is WC, which is the World Championship. Since the World Championship is the largest international tournament of the year, it makes sense that teams play more carefully and conservatively during these matches. As a result, we see less deaths. 
+
+More information on the World Championship Series: https://en.wikipedia.org/wiki/League_of_Legends_World_Championship 
+
+We can also visualize the distribution of kills per region.
+```{r boxplot2, eval=TRUE}
+lol %>%
+  ggplot(mapping=aes(x=League, y=total_kills)) +
+  geom_boxplot()
+```
+
+### Correlation between game length and number of kills
+We would also like to see if there is a correlation between game length and how many champion kills in total in a match. We can do this by grouping the data frame into 3 different time frames (Spring 2017, Summer 2017, and Spring 2018), and finding the average game length and average number of kills per region in these 3 time frames. Then, we perform linear regression to predict mean_kills from mean_game length.
+```{r corr, eval=TRUE}
+library(ggrepel)
+kill <- lol %>%
+  group_by(League, Year, Season) %>%
+  summarize(mean_kills = mean(total_kills))
+length <- lol %>%
+  group_by(League, Year, Season) %>%
+  summarize(mean_length = mean(gamelength))
+kill_length <- left_join(kill, length)
+kill_length %>%
+  ggplot(aes(x=mean_length, y=mean_kills)) +
+  facet_wrap(~Year + Season, scales="free") + 
+  geom_point() + 
+  geom_smooth(method=lm) + 
+  geom_text_repel(aes(label=League))
+```
+
+Surprisingly, there seems to be a negative linear relationship between the game length and the number of kills. So, as the game drags on, there are less champion kills on average. 
+
+Also, we saw before that OPL and TCL were the two regions with the most average kills, which also happen to be the two regions with the lowest average game time. This can be due to a multitude of reasons. One is that as the game progresses, the time it takes for a champion to respawn after dying gradually increases. See: http://leagueoflegends.wikia.com/wiki/Death. Since it takes less time for a champion to respawn in the earlier stages of the game, this could just mean that there is less time to wait before the player dies again. Conversely, in the later stages of the game, respawn time can take up to 2 minutes. If a player dies during the later stages of the game, there is one less person to defend the Nexus, and therefore higher chance of the game ending, with less chance of more kills to occur. 
+
+
+#### Standardize
+Now let's standardize the average game length and check if our linear regression model still looks the same. Here, I am standardizing the game length for all teams in a particular Season and Year. 
+```{r std, eval=TRUE}
+# table for gamelength
+length_ij <- lol %>%
+  dplyr::select(League, Year, Season, gamelength)
+# calculates average game length and standard deviation of game length for all Leagues in that particular year and season.
+length_j <- length_ij %>%
+  group_by(Year, Season) %>%
+  summarize(avg_length = mean(gamelength), sd_j = sd(gamelength))
+# standardized game length
+standard <- left_join(length_ij, length_j) %>%
+  mutate(standardized_length= ((gamelength - avg_length) /sd_j))
+lol <- lol %>%
+  left_join (standard) %>%
+  dplyr::select(-sd_j, -avg_length)
+
+# same as before, but with standardized length instead of gamelength
+kill <- lol %>%
+  group_by(League, Year, Season) %>%
+  summarize(mean_kills = mean(total_kills))
+length <- lol %>%
+  group_by(League, Year, Season) %>%
+  summarize(mean_std_length = mean(standardized_length))
+kill_length <- left_join(kill, length)
+kill_length %>%
+  ggplot(aes(x=mean_std_length, y=mean_kills)) +
+  facet_wrap(~Year + Season, scales="free") + 
+  geom_point() + 
+  geom_smooth(method=lm) + 
+  geom_text_repel(aes(label=League))
+```
+
+After standardization, the plot generally looks the same. There is still a negative linear relationship between game length and average kills.
+
+
+### Blue side Advantage?
+There is a common opinion that the team which gets placed on the blue side of the map has a higher chance of winning. This may be due to the way the terrain is set up, or the priority the blue side has in the drafting phase. Let's find out if this is true.
+
+First, we'll check the win rate of both blue and red side per region.
+```{r blue, eval=TRUE}
+lol %>%
+  group_by(League, Winner) %>%
+  summarize(games=n()) %>%
+  mutate(wr = games/sum(games)) %>%
+  ggplot(aes(x=Winner, y=wr)) + 
+  facet_wrap(~League) +
+  geom_bar(stat="identity") 
+```
+
+In general, it seems as if the blue side has a higher win rate. 
+
+## Classification
+Our prediction task will be to predict if blue team or red team will win a match given gamelength, red team kills, and blue team kills.
+
+### Comparing models
+First, we want to compare logistic regression and decision tree using 10-fold cross validation and determine which model is better to use for our prediction task.
+```{r classification, eval=TRUE}
+library(ISLR)
+library(cvTools)
+library(tree)
+lol$Winner <- as.factor(lol$Winner)
+fold_indices <- cvFolds(n=nrow(lol), K=10)
+error_rates <- sapply(1:10, function(fold_index) {
+  test_indices <- which(fold_indices$which == fold_index)
+  test_set <- lol[test_indices,]
+  train_set <- lol[-test_indices,]
+
+  logis_fit <- glm(Winner~gamelength+red_team_kills+blue_team_kills, data=train_set, family="binomial")
+  logis_pred <- ifelse(predict(logis_fit, newdata=test_set, type="response") > 0.5," Blue", "Red")
+  logis_error <- mean(test_set$Winner != logis_pred)
+  
+  tree_fit <- tree(Winner~gamelength+red_team_kills+blue_team_kills, data=train_set)
+  pruned_tree <- prune.tree(tree_fit, best=3)
+  
+  tree_pred <- predict(pruned_tree, newdata=test_set, type="class")
+  tree_error <- mean(test_set$Winner != tree_pred)
+  c(logis_error, tree_error)
+})
+rownames(error_rates) <- c("logis", "tree")
+error_rates <- as.data.frame(t(error_rates))
+
+error_rates <- error_rates %>%
+  mutate(fold=1:n()) %>%
+  gather(method, error,-fold)
+error_rates %>%
+  head() %>%
+  knitr::kable("html")
+
+dotplot(error~method, data=error_rates, ylab="Mean Prediction Error")
+lm(error~method, data=error_rates) %>%
+  broom::tidy() %>%
+  knitr::kable()
+```
+
+We can see that a decision tree is significantly better than logistic regression, so we will use a decision tree for our prediction task
+
+### Decision Tree
+```{r dt, eval=TRUE}
+winner_tree <- tree(Winner~gamelength + red_team_kills + blue_team_kills, data=lol)
+plot(winner_tree)
+text(winner_tree, pretty=0,cex=0.6)
+```
+
+
+## Conclusion
+According to our data and analysis, we have found that, surprisingly, there is a negative linear relationship between the game length and average kills. What this means to the average League of Legends viewer, is that they should not expect more champion kills as the game goes on longer. In fact, they should expect less blood bath as the length of the game increases, due to factors mentioned previously, such as respawn time. 
+
+We also found that there may be a slight bias towards the team playing on the blue side of the map, with that team having a higher chance of winning the game. We found that generally blue side has a higher win rate across most of the Leagues. Then, using a decision tree, we were able to predict who the winner of a match would be, given game length, number of blue team kills, and number of red team kills. Generally, it did seem like blue team had a slight advantage. For example, if blue team scored between 7.5 and 11.5 kills, as long as red team scored less than 10.5 kills, the winner would regardless be predicted as blue team. Whatever the reason is for this blue side advantage, we can safely assume that there is indeed a bias towards the blue side team. 
+
+Hopefully this tutorial has given you more insight on the many factors and intricacies that can impact a competitive match. The data I included and analyzed in this tutorial were heavily simplified; in the original imported csv file, there were many other datasets, such as statistics for monsters kills, structure damage, and other objectives. In the future, more research can be done on how these other factors can influence a competitive match.  
+
